@@ -14,3 +14,6 @@ logs/
 
 # Claude-Konfiguration + SSH-Deploy-Keys (nur lokal, nie ins Repo)
 .claude/
+
+# Lokale Zugangsdaten-Dateien (Secrets — nie ins Repo)
+*ZUGANGSDATEN*.txt
