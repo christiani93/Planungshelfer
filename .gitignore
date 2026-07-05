@@ -1,0 +1,16 @@
+# Laufzeit-/Geheimnis-Dateien nicht ins Repo
+planung.db
+.secret
+.env
+__pycache__/
+*.pyc
+
+# Virtuelle Umgebungen (lokal ausserhalb OneDrive, Server: .venv)
+venv/
+.venv/
+
+# Server-Logs
+logs/
+
+# Claude-Konfiguration + SSH-Deploy-Keys (nur lokal, nie ins Repo)
+.claude/

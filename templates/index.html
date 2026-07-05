@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planungshelfer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <canvas id="confetti"></canvas>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">✔️</span>
+      <h1>Planungshelfer</h1>
+    </div>
+    <div class="stats">
+      <div class="stat" title="Dein Level steigt mit gesammelten Punkten">
+        <div class="stat-big"><span id="level">1</span></div>
+        <div class="stat-label">Level</div>
+      </div>
+      <div class="stat streak" title="Tage in Folge mit erledigter Aufgabe">
+        <div class="stat-big">🔥 <span id="streak">0</span></div>
+        <div class="stat-label">Streak</div>
+      </div>
+      <div class="xpwrap" title="Fortschritt bis zum naechsten Level">
+        <div class="xpbar"><div class="xpfill" id="xpfill"></div></div>
+        <div class="stat-label"><span id="xptext">0 / 100 XP</span></div>
+      </div>
+      {% if auth %}<a class="iconbtn" href="{{ url_for('logout') }}" title="Abmelden">⎋</a>{% endif %}
+    </div>
+  </header>
+
+  <main>
+    <section class="card focus">
+      <div class="focus-head">
+        <h2>Heute im Fokus</h2>
+        <div class="today-progress">
+          <span id="todayCount">0 / 0</span> erledigt
+        </div>
+      </div>
+      <p class="hint" id="focusHint"></p>
+      <ul id="todayList" class="tasklist"></ul>
+      <button class="onething" id="oneThingBtn">🎯 Nur eine Sache — starte jetzt</button>
+      <div id="oneThingBox" class="onething-box hidden"></div>
+    </section>
+
+    <section class="card">
+      <h2>Neue Aufgabe</h2>
+      <form id="addForm" class="addform">
+        <input type="text" id="title" placeholder="Was ist zu tun?" autocomplete="off" required>
+        <div class="row">
+          <select id="priority" title="Prioritaet">
+            <option value="1">🟢 klein (10)</option>
+            <option value="2" selected>🟡 normal (20)</option>
+            <option value="3">🔴 wichtig (30)</option>
+          </select>
+          <input type="number" id="est_min" min="0" step="5" placeholder="Min." title="Geschaetzte Minuten">
+          <input type="date" id="due_date" title="Faellig bis">
+          <label class="chk"><input type="checkbox" id="is_today" checked> heute</label>
+        </div>
+        <button type="submit" class="add">+ Hinzufuegen</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Backlog <span class="muted" id="backlogCount"></span></h2>
+      <p class="hint">Alles, was noch nicht fuer heute geplant ist. Nimm nur wenig ins Heute-Fokus.</p>
+      <ul id="backlogList" class="tasklist"></ul>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
