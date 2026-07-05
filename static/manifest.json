@@ -1,0 +1,22 @@
+{
+  "name": "Planungshelfer",
+  "short_name": "Planung",
+  "description": "Motivierender ToDo-Planer: Heute-Fokus, Streak, Level & XP — damit Aufgaben Spass machen.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "de-CH",
+  "categories": ["productivity", "utilities", "lifestyle"],
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

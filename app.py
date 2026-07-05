@@ -9,8 +9,9 @@ Flask-App mit SQLite. Motivation statt reiner Verwaltung:
 Server-tauglich:
 - Login (Session) fuer die Weboberflaeche  -> aktiv, wenn PLANUNG_PASSWORD gesetzt
 - API-Token (Bearer) fuer Machine-to-Machine -> aktiv, wenn PLANUNG_API_TOKEN gesetzt
-  Damit koennen andere Projekte (Auftragsverwaltung, AgilitySoftware, ...)
-  per POST /api/ingest Aufgaben anlegen.
+  Damit koennen andere Projekte (vorgesehen: AdminPortal, Claude-MultiPC)
+  per POST /api/ingest Aufgaben anlegen. Die Auftragsverwaltung speist
+  bewusst KEINE ToDos ein.
 
 Lokal (ohne gesetzte Env-Variablen) laeuft alles offen wie gehabt.
 """
@@ -27,6 +28,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -268,6 +270,15 @@ def logout():
 @login_required
 def index():
     return render_template("index.html", auth=auth_enabled())
+
+
+@app.route("/sw.js")
+def service_worker():
+    """Service-Worker im Root-Scope ausliefern (PWA-Installierbarkeit)."""
+    response = send_from_directory(app.static_folder, "sw.js")
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.route("/api/state")
