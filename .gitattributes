@@ -1,0 +1,5 @@
+# Server-Skripte MUESSEN LF behalten, sonst /bin/bash^M-Fehler auf HostPoint
+*.sh    text eol=lf
+*.py    text eol=lf
+*.conf  text eol=lf
+deploy/.env.example text eol=lf
