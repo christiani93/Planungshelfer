@@ -15,6 +15,7 @@ Server-tauglich:
 
 Lokal (ohne gesetzte Env-Variablen) laeuft alles offen wie gehabt.
 """
+import json
 import os
 import secrets
 import sqlite3
@@ -124,6 +125,39 @@ def init_db():
     cols = {r[1] for r in db.execute("PRAGMA table_info(tasks)")}
     if "source" not in cols:
         db.execute("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'manuell'")
+
+    # Push-Subscriptions (ein Geraet = eine Zeile, per endpoint eindeutig).
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_subs (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint   TEXT UNIQUE NOT NULL,
+            p256dh     TEXT NOT NULL,
+            auth       TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    # Zeitbezogene Erinnerungen. remind_at = naive lokale Zeit (Europe/Zurich,
+    # Server-TZ). recur: 'none' | 'weekly'. kind: 'info' | 'confirm'.
+    # followup = JSON {"message","weekday","hour","minute"} — bei 'confirm'
+    # nach Bestaetigung angelegt (z.B. Mi "vorbereiten?" -> Do 06:00 "mitnehmen").
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id    INTEGER,
+            message    TEXT NOT NULL,
+            remind_at  TEXT NOT NULL,
+            recur      TEXT DEFAULT 'none',
+            kind       TEXT DEFAULT 'info',
+            followup   TEXT,
+            active     INTEGER DEFAULT 1,
+            last_sent  TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     db.commit()
     db.close()
 
@@ -239,6 +273,31 @@ def build_stats(db):
         "streak": compute_streak(db),
         "done_today": done_today,
         "today_total": today_total,
+    }
+
+
+# ---------------------------------------------------------------- reminders
+def next_weekday_time(weekday, hour, minute=0, after=None):
+    """Naechster Zeitpunkt strikt nach `after` (default jetzt), der auf den
+    Wochentag `weekday` (Mo=0 .. So=6) und die Uhrzeit faellt."""
+    now = after or datetime.now()
+    target = now.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    target += timedelta(days=(int(weekday) - now.weekday()) % 7)
+    if target <= now:
+        target += timedelta(days=7)
+    return target
+
+
+def reminder_to_dict(row):
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "message": row["message"],
+        "remind_at": row["remind_at"],
+        "recur": row["recur"],
+        "kind": row["kind"],
+        "has_followup": bool(row["followup"]),
+        "active": bool(row["active"]),
     }
 
 
@@ -391,6 +450,128 @@ def api_delete(tid):
     db.execute("DELETE FROM tasks WHERE id=?", (tid,))
     db.commit()
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------- push / reminders
+@app.route("/api/push/config")
+@login_required
+def api_push_config():
+    """Liefert den VAPID-Public-Key (Application-Server-Key) fuer den Browser."""
+    from push import VAPID_PUBLIC_KEY, push_configured
+    return jsonify({"enabled": push_configured(), "key": VAPID_PUBLIC_KEY or ""})
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+@login_required
+def api_push_subscribe():
+    """Speichert eine Browser-Push-Subscription (idempotent per endpoint)."""
+    data = request.get_json(force=True, silent=True) or {}
+    endpoint = (data.get("endpoint") or "").strip()
+    keys = data.get("keys") or {}
+    p256dh = (keys.get("p256dh") or "").strip()
+    auth = (keys.get("auth") or "").strip()
+    if not (endpoint and p256dh and auth):
+        return jsonify({"error": "unvollstaendige Subscription"}), 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO push_subs (endpoint, p256dh, auth, created_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth",
+        (endpoint, p256dh, auth, datetime.now().isoformat()),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/push/test", methods=["POST"])
+@login_required
+def api_push_test():
+    """Schickt sofort einen Test-Push an alle registrierten Geraete."""
+    from push import push_configured, send_push
+    if not push_configured():
+        return jsonify({"error": "Push nicht konfiguriert (VAPID fehlt)"}), 503
+    db = get_db()
+    subs = db.execute("SELECT * FROM push_subs").fetchall()
+    payload = json.dumps({
+        "title": "Planungshelfer",
+        "body": "Benachrichtigungen sind aktiv. 🔔",
+        "tag": "test",
+    })
+    sent = 0
+    for s in subs:
+        result = send_push({"endpoint": s["endpoint"], "p256dh": s["p256dh"],
+                            "auth": s["auth"]}, payload)
+        if result == "ok":
+            sent += 1
+        elif result == "gone":
+            db.execute("DELETE FROM push_subs WHERE id=?", (s["id"],))
+    db.commit()
+    return jsonify({"ok": True, "sent": sent, "devices": len(subs)})
+
+
+@app.route("/api/reminders", methods=["GET"])
+@login_required
+def api_reminders_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM reminders WHERE active=1 ORDER BY remind_at ASC"
+    ).fetchall()
+    return jsonify({"reminders": [reminder_to_dict(r) for r in rows]})
+
+
+@app.route("/api/reminders", methods=["POST"])
+@login_required
+def api_reminders_add():
+    data = request.get_json(force=True, silent=True) or {}
+    message = (data.get("message") or "").strip()
+    remind_at = (data.get("remind_at") or "").strip()  # 'YYYY-MM-DDTHH:MM'
+    if not message or not remind_at:
+        return jsonify({"error": "Nachricht und Zeitpunkt noetig"}), 400
+    recur = data.get("recur") if data.get("recur") in ("none", "weekly") else "none"
+    kind = data.get("kind") if data.get("kind") in ("info", "confirm") else "info"
+    followup = data.get("followup")
+    followup_json = json.dumps(followup) if isinstance(followup, dict) else None
+    task_id = data.get("task_id")
+    db = get_db()
+    db.execute(
+        "INSERT INTO reminders (task_id, message, remind_at, recur, kind, "
+        "followup, active, created_at) VALUES (?,?,?,?,?,?,1,?)",
+        (int(task_id) if task_id else None, message, remind_at, recur, kind,
+         followup_json, datetime.now().isoformat()),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/reminders/<int:rid>", methods=["DELETE"])
+@login_required
+def api_reminders_delete(rid):
+    db = get_db()
+    db.execute("DELETE FROM reminders WHERE id=?", (rid,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/reminders/<int:rid>/confirm", methods=["POST"])
+@login_required
+def api_reminder_confirm(rid):
+    """Wird vom Service-Worker aufgerufen, wenn der 'Ja'-Button einer
+    Bestaetigungs-Erinnerung getippt wird -> legt die Folge-Erinnerung an."""
+    db = get_db()
+    row = db.execute("SELECT * FROM reminders WHERE id=?", (rid,)).fetchone()
+    if row is None:
+        return jsonify({"error": "nicht gefunden"}), 404
+    if not row["followup"]:
+        return jsonify({"ok": True, "created": False})
+    spec = json.loads(row["followup"])
+    at = next_weekday_time(spec["weekday"], spec["hour"], spec.get("minute", 0))
+    db.execute(
+        "INSERT INTO reminders (task_id, message, remind_at, recur, kind, "
+        "active, created_at) VALUES (?,?,?,?,?,1,?)",
+        (row["task_id"], spec["message"], at.isoformat(timespec="minutes"),
+         "none", "info", datetime.now().isoformat()),
+    )
+    db.commit()
+    return jsonify({"ok": True, "created": True, "at": at.isoformat(timespec="minutes")})
 
 
 @app.route("/api/one-thing")

@@ -31,6 +31,7 @@ function taskRow(t, inToday) {
   const actions = done
     ? `<button class="iconbtn del" data-del="${t.id}" title="Loeschen">🗑</button>`
     : `<button class="iconbtn" data-toggle="${t.id}" data-to="${toggleTo}">${toggleLabel}</button>
+       <button class="iconbtn" data-remind="${t.id}" title="Erinnerung setzen">🔔</button>
        <button class="iconbtn del" data-del="${t.id}" title="Loeschen">🗑</button>`;
   return `
     <li class="task ${done ? "done" : ""} ${t.overdue ? "overdue" : ""}">
@@ -75,7 +76,52 @@ async function load() {
     ? s.backlog.map((t) => taskRow(t, false)).join("")
     : `<li class="empty">Backlog ist leer. 🌱</li>`;
   $("backlogCount").textContent = s.backlog.length ? `(${s.backlog.length})` : "";
+
+  // Titel-Lookup fuer den 🔔-Button (vermeidet Attribut-Escaping).
+  taskTitles = {};
+  [...s.today, ...s.backlog].forEach((t) => { taskTitles[t.id] = t.title; });
+
   bindRows();
+  loadReminders();
+}
+
+let taskTitles = {};
+
+function fmtRemAt(iso) {
+  // 'YYYY-MM-DDTHH:MM' -> 'DD.MM. HH:MM'
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso || "");
+  return m ? `${m[3]}.${m[2]}. ${m[4]}:${m[5]}` : iso;
+}
+
+async function loadReminders() {
+  const r = await api("/api/reminders");
+  const list = $("reminderList");
+  if (!r.reminders || !r.reminders.length) {
+    list.innerHTML = `<li class="empty">Keine Erinnerungen gesetzt.</li>`;
+    return;
+  }
+  list.innerHTML = r.reminders
+    .map((rem) => {
+      const badges = [];
+      if (rem.recur === "weekly") badges.push(`<span class="badge p2">woechentlich</span>`);
+      if (rem.kind === "confirm") badges.push(`<span class="badge p3">Ja/Nein</span>`);
+      return `<li class="task">
+        <div class="task-main">
+          <div class="task-title">🔔 ${escapeHtml(rem.message)}</div>
+          <div class="task-meta"><span class="due">📅 ${fmtRemAt(rem.remind_at)}</span> ${badges.join(" ")}</div>
+        </div>
+        <div class="task-actions">
+          <button class="iconbtn del" data-remdel="${rem.id}" title="Erinnerung loeschen">🗑</button>
+        </div>
+      </li>`;
+    })
+    .join("");
+  list.querySelectorAll("[data-remdel]").forEach((el) =>
+    el.addEventListener("click", async () => {
+      await api(`/api/reminders/${el.dataset.remdel}`, { method: "DELETE" });
+      loadReminders();
+    })
+  );
 }
 
 function bindRows() {
@@ -88,6 +134,16 @@ function bindRows() {
   document.querySelectorAll("[data-del]").forEach((el) =>
     el.addEventListener("click", () => del(el.dataset.del))
   );
+  document.querySelectorAll("[data-remind]").forEach((el) =>
+    el.addEventListener("click", () => prefillReminder(el.dataset.remind))
+  );
+}
+
+function prefillReminder(taskId) {
+  $("remTaskId").value = taskId;
+  $("remMessage").value = taskTitles[taskId] || "";
+  $("reminderCard").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("remAt").focus();
 }
 
 async function complete(id, el) {
@@ -211,4 +267,111 @@ function animate() {
   else ctx.clearRect(0, 0, cv.width, cv.height);
 }
 
+// ------------------------------------------------------------ Web-Push
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+async function refreshNotifState() {
+  const btn = $("notifBtn");
+  const hint = $("notifHint");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    btn.style.display = "none";
+    hint.textContent = "Dieses Geraet/Browser unterstuetzt keine Push-Benachrichtigungen.";
+    return;
+  }
+  if (Notification.permission === "denied") {
+    btn.textContent = "Blockiert";
+    btn.disabled = true;
+    hint.textContent = "Benachrichtigungen sind im Browser blockiert — in den Seiten-Einstellungen erlauben.";
+    return;
+  }
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && (await reg.pushManager.getSubscription());
+  if (sub && Notification.permission === "granted") {
+    btn.textContent = "Test senden";
+    btn.dataset.mode = "test";
+    hint.textContent = "Benachrichtigungen sind auf diesem Geraet aktiv. 🔔";
+  } else {
+    btn.textContent = "Aktivieren";
+    btn.dataset.mode = "enable";
+  }
+}
+
+async function enableNotifications() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Benachrichtigungen nicht erlaubt."); return refreshNotifState(); }
+    const cfg = await api("/api/push/config");
+    if (!cfg.enabled || !cfg.key) { toast("Server: Push nicht konfiguriert."); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(cfg.key),
+    });
+    const json = sub.toJSON();
+    const r = await api("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: sub.endpoint, keys: json.keys }),
+    });
+    if (r.ok) { toast("Benachrichtigungen aktiviert. 🔔"); }
+    await refreshNotifState();
+  } catch (e) {
+    toast("Konnte Benachrichtigungen nicht aktivieren.");
+  }
+}
+
+$("notifBtn").addEventListener("click", async () => {
+  if ($("notifBtn").dataset.mode === "test") {
+    const r = await api("/api/push/test", { method: "POST" });
+    toast(r.sent ? `Test an ${r.sent} Geraet(e) gesendet.` : "Kein Geraet erreicht.");
+  } else {
+    await enableNotifications();
+  }
+});
+
+// Folge-Erinnerung nur bei "mit Ja/Nein" anbieten
+$("remConfirm").addEventListener("change", () => {
+  $("followupBox").classList.toggle("hidden", !$("remConfirm").checked);
+});
+
+$("reminderForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = {
+    message: $("remMessage").value,
+    remind_at: $("remAt").value,
+    recur: $("remWeekly").checked ? "weekly" : "none",
+    kind: $("remConfirm").checked ? "confirm" : "info",
+    task_id: $("remTaskId").value || null,
+  };
+  if ($("remConfirm").checked && $("remFollowMsg").value.trim()) {
+    const [h, m] = ($("remFollowTime").value || "06:00").split(":");
+    body.followup = {
+      message: $("remFollowMsg").value.trim(),
+      weekday: Number($("remFollowWeekday").value),
+      hour: Number(h),
+      minute: Number(m),
+    };
+  }
+  const r = await api("/api/reminders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.ok) {
+    $("reminderForm").reset();
+    $("remTaskId").value = "";
+    $("followupBox").classList.add("hidden");
+    toast("Erinnerung gespeichert.");
+    loadReminders();
+  } else {
+    toast(r.error || "Fehler beim Speichern.");
+  }
+});
+
+refreshNotifState();
 load();

@@ -4,7 +4,7 @@
 // der Server muss laufen. Der Cache dient nur der Installierbarkeit als PWA
 // und schnellem Start.
 
-const CACHE_NAME = "planungshelfer-v1";
+const CACHE_NAME = "planungshelfer-v2";
 const APP_SHELL = [
   "/static/style.css",
   "/static/app.js",
@@ -51,5 +51,58 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(event.request))
+  );
+});
+
+// ---------------------------------------------------------------- Web-Push
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+  const title = data.title || "Planungshelfer";
+  const isConfirm = data.kind === "confirm";
+  const options = {
+    body: data.body || "",
+    icon: "/static/icon.svg",
+    badge: "/static/icon.svg",
+    tag: data.tag || "planungshelfer",
+    renotify: true,
+    requireInteraction: isConfirm, // Bestaetigung soll stehen bleiben
+    data: { reminder_id: data.reminder_id || null, kind: data.kind || "info" },
+    actions: isConfirm
+      ? [
+          { action: "confirm", title: "Ja ✅" },
+          { action: "dismiss", title: "Nein" },
+        ]
+      : [],
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  const notif = event.notification;
+  const rid = notif.data && notif.data.reminder_id;
+  notif.close();
+
+  if (event.action === "dismiss") return;
+
+  if (event.action === "confirm" && rid) {
+    // Folge-Erinnerung serverseitig anlegen (Session-Cookie wird mitgesendet).
+    event.waitUntil(
+      fetch(`/api/reminders/${rid}/confirm`, {
+        method: "POST",
+        credentials: "same-origin",
+      }).catch(() => {})
+    );
+    return;
+  }
+
+  // Klick auf den Body: App oeffnen / fokussieren.
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ("focus" in client) return client.focus();
+      }
+      return self.clients.openWindow("/");
+    })
   );
 });

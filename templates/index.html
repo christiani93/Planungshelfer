@@ -76,6 +76,40 @@
       <p class="hint">Alles, was noch nicht fuer heute geplant ist. Nimm nur wenig ins Heute-Fokus.</p>
       <ul id="backlogList" class="tasklist"></ul>
     </section>
+
+    <section class="card" id="reminderCard">
+      <div class="focus-head">
+        <h2>🔔 Erinnerungen</h2>
+        <button class="iconbtn" id="notifBtn" title="Benachrichtigungen auf diesem Geraet aktivieren">Aktivieren</button>
+      </div>
+      <p class="hint" id="notifHint">Zeitbezogene Push-Erinnerungen — auch wenn die App geschlossen ist (installierte PWA auf dem Handy).</p>
+
+      <form id="reminderForm" class="addform">
+        <input type="text" id="remMessage" placeholder="Woran erinnern? (z.B. Muell vorbereiten)" autocomplete="off" required>
+        <div class="row">
+          <input type="datetime-local" id="remAt" title="Zeitpunkt" required>
+          <label class="chk"><input type="checkbox" id="remWeekly"> woechentlich</label>
+          <label class="chk"><input type="checkbox" id="remConfirm"> mit Ja/Nein</label>
+        </div>
+        <div id="followupBox" class="followup hidden">
+          <p class="hint">Bei „Ja" Folge-Erinnerung anlegen:</p>
+          <div class="row">
+            <input type="text" id="remFollowMsg" placeholder="Folge-Nachricht (z.B. Muell mitnehmen)" autocomplete="off">
+            <select id="remFollowWeekday" title="Wochentag">
+              <option value="0">Mo</option><option value="1">Di</option>
+              <option value="2">Mi</option><option value="3">Do</option>
+              <option value="4">Fr</option><option value="5">Sa</option>
+              <option value="6">So</option>
+            </select>
+            <input type="time" id="remFollowTime" value="06:00" title="Uhrzeit">
+          </div>
+        </div>
+        <input type="hidden" id="remTaskId" value="">
+        <button type="submit" class="add">+ Erinnerung</button>
+      </form>
+
+      <ul id="reminderList" class="tasklist"></ul>
+    </section>
   </main>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
