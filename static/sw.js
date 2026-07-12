@@ -4,7 +4,7 @@
 // der Server muss laufen. Der Cache dient nur der Installierbarkeit als PWA
 // und schnellem Start.
 
-const CACHE_NAME = "planungshelfer-v3";
+const CACHE_NAME = "planungshelfer-v4";
 const APP_SHELL = [
   "/static/style.css",
   "/static/app.js",

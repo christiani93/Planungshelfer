@@ -531,8 +531,11 @@ def api_push_test():
 @login_required
 def api_reminders_list():
     db = get_db()
+    # Aktive Erinnerungen fuer die Liste + noch ausstehende Bestaetigungen
+    # (auch einmalige mit active=0), damit das Ja/Nein-Banner sie zeigt.
     rows = db.execute(
-        "SELECT * FROM reminders WHERE active=1 ORDER BY remind_at ASC"
+        "SELECT * FROM reminders WHERE active=1 OR pending_since IS NOT NULL "
+        "ORDER BY remind_at ASC"
     ).fetchall()
     return jsonify({"reminders": [reminder_to_dict(r) for r in rows]})
 

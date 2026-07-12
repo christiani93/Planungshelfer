@@ -126,13 +126,15 @@ function fmtRemAt(iso) {
 
 async function loadReminders() {
   const r = await api("/api/reminders");
-  renderPending((r.reminders || []).filter((rem) => rem.pending));
+  const all = r.reminders || [];
+  renderPending(all.filter((rem) => rem.pending));
+  const active = all.filter((rem) => rem.active);
   const list = $("reminderList");
-  if (!r.reminders || !r.reminders.length) {
+  if (!active.length) {
     list.innerHTML = `<li class="empty">Keine Erinnerungen gesetzt.</li>`;
     return;
   }
-  list.innerHTML = r.reminders
+  list.innerHTML = active
     .map((rem) => {
       const badges = [];
       if (rem.recur === "weekly") badges.push(`<span class="badge p2">woechentlich</span>`);
