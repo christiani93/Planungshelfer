@@ -4,7 +4,7 @@
 // der Server muss laufen. Der Cache dient nur der Installierbarkeit als PWA
 // und schnellem Start.
 
-const CACHE_NAME = "planungshelfer-v5";
+const CACHE_NAME = "planungshelfer-v6";
 const APP_SHELL = [
   "/static/style.css",
   "/static/app.js",
@@ -68,12 +68,10 @@ self.addEventListener("push", (event) => {
     renotify: true,
     requireInteraction: isConfirm, // Bestaetigung soll stehen bleiben
     data: { reminder_id: data.reminder_id || null, kind: data.kind || "info" },
-    actions: isConfirm
-      ? [
-          { action: "confirm", title: "Ja ✅" },
-          { action: "dismiss", title: "Nein" },
-        ]
-      : [],
+    // Nur EIN Button: der Tipp auf einen zweiten Button kam auf Android 10
+    // deterministisch als 'dismiss' an. Mit nur "Ja" ist kein Falsch-Tipp
+    // moeglich; Verneinen geht per Wegwischen oder im App-Banner.
+    actions: isConfirm ? [{ action: "confirm", title: "✅ Ja, erledigt" }] : [],
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -94,18 +92,6 @@ self.addEventListener("notificationclick", (event) => {
     }).catch(() => {})
   );
 
-  if (event.action === "dismiss") {
-    if (rid) {
-      event.waitUntil(
-        fetch(`/api/reminders/${rid}/decline`, {
-          method: "POST",
-          credentials: "same-origin",
-        }).catch(() => {})
-      );
-    }
-    return;
-  }
-
   if (event.action === "confirm" && rid) {
     // Folge-Erinnerung serverseitig anlegen (Session-Cookie wird mitgesendet).
     event.waitUntil(
@@ -117,8 +103,8 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
-  // Klick auf den Body: App oeffnen / fokussieren (dort erscheint das
-  // Ja/Nein-Banner, falls eine Bestaetigung aussteht).
+  // Jeder andere Tipp (auf den Body): App oeffnen / fokussieren — dort
+  // erscheint das Ja/Nein-Banner, falls eine Bestaetigung aussteht.
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const client of list) {
