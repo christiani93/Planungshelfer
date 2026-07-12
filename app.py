@@ -501,6 +501,17 @@ def api_push_subscribe():
     return jsonify({"ok": True})
 
 
+@app.route("/api/push/click", methods=["POST"])
+@login_required
+def api_push_click():
+    """Debug: der Service-Worker meldet hier den exakten action-Wert eines
+    Notification-Klicks, damit wir Button-Verhalten eindeutig sehen."""
+    data = request.get_json(force=True, silent=True) or {}
+    print(f"[notif-click] action={data.get('action')!r} id={data.get('id')}",
+          flush=True)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/push/test", methods=["POST"])
 @login_required
 def api_push_test():
