@@ -87,6 +87,37 @@ async function load() {
 
 let taskTitles = {};
 
+function renderPending(pending) {
+  const box = $("pendingBox");
+  if (!box) return;
+  if (!pending.length) { box.innerHTML = ""; return; }
+  box.innerHTML = pending
+    .map(
+      (rem) => `
+    <div class="pending" data-pid="${rem.id}">
+      <div class="pending-q">✅ ${escapeHtml(rem.message)}</div>
+      <div class="pending-actions">
+        <button class="add" data-confirm="${rem.id}">Ja</button>
+        <button class="iconbtn" data-decline="${rem.id}">Nein</button>
+      </div>
+    </div>`
+    )
+    .join("");
+  box.querySelectorAll("[data-confirm]").forEach((el) =>
+    el.addEventListener("click", async () => {
+      const res = await api(`/api/reminders/${el.dataset.confirm}/confirm`, { method: "POST" });
+      toast(res.created ? "Erledigt — Folge-Erinnerung gesetzt. 👍" : "Notiert. 👍");
+      loadReminders();
+    })
+  );
+  box.querySelectorAll("[data-decline]").forEach((el) =>
+    el.addEventListener("click", async () => {
+      await api(`/api/reminders/${el.dataset.decline}/decline`, { method: "POST" });
+      loadReminders();
+    })
+  );
+}
+
 function fmtRemAt(iso) {
   // 'YYYY-MM-DDTHH:MM' -> 'DD.MM. HH:MM'
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso || "");
@@ -95,6 +126,7 @@ function fmtRemAt(iso) {
 
 async function loadReminders() {
   const r = await api("/api/reminders");
+  renderPending((r.reminders || []).filter((rem) => rem.pending));
   const list = $("reminderList");
   if (!r.reminders || !r.reminders.length) {
     list.innerHTML = `<li class="empty">Keine Erinnerungen gesetzt.</li>`;

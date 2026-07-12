@@ -145,19 +145,24 @@ def init_db():
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS reminders (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id    INTEGER,
-            message    TEXT NOT NULL,
-            remind_at  TEXT NOT NULL,
-            recur      TEXT DEFAULT 'none',
-            kind       TEXT DEFAULT 'info',
-            followup   TEXT,
-            active     INTEGER DEFAULT 1,
-            last_sent  TEXT,
-            created_at TEXT NOT NULL
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id       INTEGER,
+            message       TEXT NOT NULL,
+            remind_at     TEXT NOT NULL,
+            recur         TEXT DEFAULT 'none',
+            kind          TEXT DEFAULT 'info',
+            followup      TEXT,
+            active        INTEGER DEFAULT 1,
+            last_sent     TEXT,
+            pending_since TEXT,
+            created_at    TEXT NOT NULL
         )
         """
     )
+    # Migration: pending_since nachruesten (DB aus erster Push-Version).
+    rcols = {r[1] for r in db.execute("PRAGMA table_info(reminders)")}
+    if "pending_since" not in rcols:
+        db.execute("ALTER TABLE reminders ADD COLUMN pending_since TEXT")
     db.commit()
     db.close()
 
@@ -288,7 +293,18 @@ def next_weekday_time(weekday, hour, minute=0, after=None):
     return target
 
 
+def _within_hours(iso, hours):
+    if not iso:
+        return False
+    try:
+        return datetime.fromisoformat(iso) >= datetime.now() - timedelta(hours=hours)
+    except ValueError:
+        return False
+
+
 def reminder_to_dict(row):
+    keys = row.keys()
+    pending_since = row["pending_since"] if "pending_since" in keys else None
     return {
         "id": row["id"],
         "task_id": row["task_id"],
@@ -298,6 +314,9 @@ def reminder_to_dict(row):
         "kind": row["kind"],
         "has_followup": bool(row["followup"]),
         "active": bool(row["active"]),
+        # "pending" = Bestaetigung steht aus (in den letzten 24h gefeuert, noch
+        # nicht bejaht/verneint) -> App zeigt ein Ja/Nein-Banner.
+        "pending": bool(pending_since) and _within_hours(pending_since, 24),
     }
 
 
@@ -554,24 +573,38 @@ def api_reminders_delete(rid):
 @app.route("/api/reminders/<int:rid>/confirm", methods=["POST"])
 @login_required
 def api_reminder_confirm(rid):
-    """Wird vom Service-Worker aufgerufen, wenn der 'Ja'-Button einer
-    Bestaetigungs-Erinnerung getippt wird -> legt die Folge-Erinnerung an."""
+    """Bestaetigung ('Ja') einer Erinnerung — per Notification-Button ODER
+    per In-App-Banner. Legt die Folge-Erinnerung an und raeumt 'pending' ab."""
     db = get_db()
     row = db.execute("SELECT * FROM reminders WHERE id=?", (rid,)).fetchone()
     if row is None:
         return jsonify({"error": "nicht gefunden"}), 404
-    if not row["followup"]:
-        return jsonify({"ok": True, "created": False})
-    spec = json.loads(row["followup"])
-    at = next_weekday_time(spec["weekday"], spec["hour"], spec.get("minute", 0))
-    db.execute(
-        "INSERT INTO reminders (task_id, message, remind_at, recur, kind, "
-        "active, created_at) VALUES (?,?,?,?,?,1,?)",
-        (row["task_id"], spec["message"], at.isoformat(timespec="minutes"),
-         "none", "info", datetime.now().isoformat()),
-    )
+    db.execute("UPDATE reminders SET pending_since=NULL WHERE id=?", (rid,))
+    created_at = None
+    if row["followup"]:
+        spec = json.loads(row["followup"])
+        at = next_weekday_time(spec["weekday"], spec["hour"], spec.get("minute", 0))
+        db.execute(
+            "INSERT INTO reminders (task_id, message, remind_at, recur, kind, "
+            "active, created_at) VALUES (?,?,?,?,?,1,?)",
+            (row["task_id"], spec["message"], at.isoformat(timespec="minutes"),
+             "none", "info", datetime.now().isoformat()),
+        )
+        created_at = at.isoformat(timespec="minutes")
     db.commit()
-    return jsonify({"ok": True, "created": True, "at": at.isoformat(timespec="minutes")})
+    print(f"[reminder] confirm id={rid} followup_at={created_at}", flush=True)
+    return jsonify({"ok": True, "created": bool(created_at), "at": created_at})
+
+
+@app.route("/api/reminders/<int:rid>/decline", methods=["POST"])
+@login_required
+def api_reminder_decline(rid):
+    """Verneinung ('Nein') — raeumt nur 'pending' ab, keine Folge-Erinnerung."""
+    db = get_db()
+    db.execute("UPDATE reminders SET pending_since=NULL WHERE id=?", (rid,))
+    db.commit()
+    print(f"[reminder] decline id={rid}", flush=True)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/one-thing")

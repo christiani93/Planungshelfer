@@ -4,7 +4,7 @@
 // der Server muss laufen. Der Cache dient nur der Installierbarkeit als PWA
 // und schnellem Start.
 
-const CACHE_NAME = "planungshelfer-v2";
+const CACHE_NAME = "planungshelfer-v3";
 const APP_SHELL = [
   "/static/style.css",
   "/static/app.js",
@@ -83,7 +83,17 @@ self.addEventListener("notificationclick", (event) => {
   const rid = notif.data && notif.data.reminder_id;
   notif.close();
 
-  if (event.action === "dismiss") return;
+  if (event.action === "dismiss") {
+    if (rid) {
+      event.waitUntil(
+        fetch(`/api/reminders/${rid}/decline`, {
+          method: "POST",
+          credentials: "same-origin",
+        }).catch(() => {})
+      );
+    }
+    return;
+  }
 
   if (event.action === "confirm" && rid) {
     // Folge-Erinnerung serverseitig anlegen (Session-Cookie wird mitgesendet).
@@ -96,7 +106,8 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
-  // Klick auf den Body: App oeffnen / fokussieren.
+  // Klick auf den Body: App oeffnen / fokussieren (dort erscheint das
+  // Ja/Nein-Banner, falls eine Bestaetigung aussteht).
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const client of list) {

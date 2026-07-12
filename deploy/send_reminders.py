@@ -60,7 +60,11 @@ def main():
     subs = db.execute("SELECT * FROM push_subs").fetchall()
     configured = push_configured()
 
+    def log(msg):
+        print(f"{now_iso} {msg}", flush=True)
+
     for rem in due:
+        results = {"ok": 0, "gone": 0, "error": 0}
         if configured and subs:
             payload = json.dumps({
                 "title": "Planungshelfer",
@@ -74,8 +78,15 @@ def main():
                     {"endpoint": s["endpoint"], "p256dh": s["p256dh"], "auth": s["auth"]},
                     payload,
                 )
+                results[result] = results.get(result, 0) + 1
                 if result == "gone":
                     db.execute("DELETE FROM push_subs WHERE id=?", (s["id"],))
+        log(f"gesendet id={rem['id']} kind={rem['kind']} "
+            f"'{rem['message']}' subs={len(subs)} -> {results}")
+
+        # Bei Bestaetigungs-Erinnerungen: 'pending' setzen, damit die App auch
+        # bei blossem Oeffnen (ohne Button-Tipp) das Ja/Nein-Banner zeigt.
+        pending = now_iso if rem["kind"] == "confirm" else None
 
         # Naechste Faelligkeit setzen bzw. einmalige deaktivieren.
         if rem["recur"] == "weekly":
@@ -83,13 +94,13 @@ def main():
             while nxt <= now:
                 nxt += timedelta(days=7)
             db.execute(
-                "UPDATE reminders SET remind_at=?, last_sent=? WHERE id=?",
-                (nxt.isoformat(timespec="minutes"), now_iso, rem["id"]),
+                "UPDATE reminders SET remind_at=?, last_sent=?, pending_since=? WHERE id=?",
+                (nxt.isoformat(timespec="minutes"), now_iso, pending, rem["id"]),
             )
         else:
             db.execute(
-                "UPDATE reminders SET active=0, last_sent=? WHERE id=?",
-                (now_iso, rem["id"]),
+                "UPDATE reminders SET active=0, last_sent=?, pending_since=? WHERE id=?",
+                (now_iso, pending, rem["id"]),
             )
 
     db.commit()
