@@ -38,6 +38,7 @@ def load_env(path):
 def main():
     load_env(os.path.join(ROOT, ".env"))
     sys.path.insert(0, ROOT)
+    import reminders_core
     from push import push_configured, send_push  # nach load_env importieren!
 
     db_path = os.environ.get("PLANUNG_DB") or os.path.join(ROOT, "planung.db")
@@ -50,7 +51,8 @@ def main():
     now_iso = now.isoformat(timespec="minutes")
 
     due = db.execute(
-        "SELECT * FROM reminders WHERE active=1 AND remind_at <= ? ORDER BY remind_at",
+        "SELECT * FROM reminders WHERE active=1 AND (paused IS NULL OR paused=0) "
+        "AND remind_at <= ? ORDER BY remind_at",
         (now_iso,),
     ).fetchall()
     if not due:
@@ -88,15 +90,23 @@ def main():
         # bei blossem Oeffnen (ohne Button-Tipp) das Ja/Nein-Banner zeigt.
         pending = now_iso if rem["kind"] == "confirm" else None
 
-        # Naechste Faelligkeit setzen bzw. einmalige deaktivieren.
-        if rem["recur"] == "weekly":
-            nxt = datetime.fromisoformat(rem["remind_at"])
-            while nxt <= now:
-                nxt += timedelta(days=7)
-            db.execute(
-                "UPDATE reminders SET remind_at=?, last_sent=?, pending_since=? WHERE id=?",
-                (nxt.isoformat(timespec="minutes"), now_iso, pending, rem["id"]),
-            )
+        # Naechste Faelligkeit setzen bzw. einmalige/abgelaufene deaktivieren.
+        recur = rem["recur"]
+        if recur in ("daily", "weekly"):
+            t = datetime.fromisoformat(rem["remind_at"])
+            nxt = reminders_core.next_fire(recur, rem["weekdays"], t.hour, t.minute, now)
+            until = rem["until"]
+            if until and nxt.date().isoformat() > until:
+                db.execute(
+                    "UPDATE reminders SET active=0, last_sent=?, pending_since=? WHERE id=?",
+                    (now_iso, pending, rem["id"]),
+                )
+                log(f"  -> Enddatum {until} erreicht, deaktiviert id={rem['id']}")
+            else:
+                db.execute(
+                    "UPDATE reminders SET remind_at=?, last_sent=?, pending_since=? WHERE id=?",
+                    (nxt.isoformat(timespec="minutes"), now_iso, pending, rem["id"]),
+                )
         else:
             db.execute(
                 "UPDATE reminders SET active=0, last_sent=?, pending_since=? WHERE id=?",

@@ -22,6 +22,8 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from functools import wraps
 
+import reminders_core
+
 from flask import (
     Flask,
     g,
@@ -150,6 +152,9 @@ def init_db():
             message       TEXT NOT NULL,
             remind_at     TEXT NOT NULL,
             recur         TEXT DEFAULT 'none',
+            weekdays      TEXT,
+            until         TEXT,
+            paused        INTEGER DEFAULT 0,
             kind          TEXT DEFAULT 'info',
             followup      TEXT,
             active        INTEGER DEFAULT 1,
@@ -159,10 +164,26 @@ def init_db():
         )
         """
     )
-    # Migration: pending_since nachruesten (DB aus erster Push-Version).
+    # Migrationen: Spalten nachruesten (DB aus aelteren Push-Versionen).
     rcols = {r[1] for r in db.execute("PRAGMA table_info(reminders)")}
     if "pending_since" not in rcols:
         db.execute("ALTER TABLE reminders ADD COLUMN pending_since TEXT")
+    if "weekdays" not in rcols:
+        db.execute("ALTER TABLE reminders ADD COLUMN weekdays TEXT")
+    if "until" not in rcols:
+        db.execute("ALTER TABLE reminders ADD COLUMN until TEXT")
+    if "paused" not in rcols:
+        db.execute("ALTER TABLE reminders ADD COLUMN paused INTEGER DEFAULT 0")
+    # Bestehende woechentliche Erinnerungen ohne weekdays: aus remind_at ableiten.
+    for row in db.execute(
+        "SELECT id, remind_at FROM reminders WHERE recur='weekly' AND "
+        "(weekdays IS NULL OR weekdays='')"
+    ).fetchall():
+        try:
+            wd = datetime.fromisoformat(row[1]).weekday()
+            db.execute("UPDATE reminders SET weekdays=? WHERE id=?", (str(wd), row[0]))
+        except (ValueError, TypeError):
+            pass
     db.commit()
     db.close()
 
@@ -305,14 +326,22 @@ def _within_hours(iso, hours):
 def reminder_to_dict(row):
     keys = row.keys()
     pending_since = row["pending_since"] if "pending_since" in keys else None
+    weekdays = reminders_core.parse_weekdays(
+        row["weekdays"] if "weekdays" in keys else None
+    )
     return {
         "id": row["id"],
         "task_id": row["task_id"],
         "message": row["message"],
         "remind_at": row["remind_at"],
         "recur": row["recur"],
+        "weekdays": weekdays,
+        "until": row["until"] if "until" in keys else None,
+        "paused": bool(row["paused"]) if "paused" in keys else False,
+        "recur_label": reminders_core.describe(row["recur"], weekdays),
         "kind": row["kind"],
         "has_followup": bool(row["followup"]),
+        "followup": json.loads(row["followup"]) if row["followup"] else None,
         "active": bool(row["active"]),
         # "pending" = Bestaetigung steht aus (in den letzten 24h gefeuert, noch
         # nicht bejaht/verneint) -> App zeigt ein Ja/Nein-Banner.
@@ -540,28 +569,114 @@ def api_reminders_list():
     return jsonify({"reminders": [reminder_to_dict(r) for r in rows]})
 
 
-@app.route("/api/reminders", methods=["POST"])
-@login_required
-def api_reminders_add():
-    data = request.get_json(force=True, silent=True) or {}
+def _parse_reminder_body(data):
+    """Baut aus dem Request-Body die DB-Felder. Wirft ValueError bei ungueltig.
+    Berechnet remind_at fuer wiederkehrende Erinnerungen auf die naechste
+    Faelligkeit (Uhrzeit aus der Eingabe, Datum je nach recur/weekdays)."""
     message = (data.get("message") or "").strip()
-    remind_at = (data.get("remind_at") or "").strip()  # 'YYYY-MM-DDTHH:MM'
-    if not message or not remind_at:
-        return jsonify({"error": "Nachricht und Zeitpunkt noetig"}), 400
-    recur = data.get("recur") if data.get("recur") in ("none", "weekly") else "none"
+    remind_at_in = (data.get("remind_at") or "").strip()  # 'YYYY-MM-DDTHH:MM'
+    if not message or not remind_at_in:
+        raise ValueError("Nachricht und Zeitpunkt noetig")
+    try:
+        base_dt = datetime.fromisoformat(remind_at_in)
+    except ValueError:
+        raise ValueError("Ungueltiger Zeitpunkt")
+
+    recur = data.get("recur")
+    if recur not in ("none", "daily", "weekly"):
+        recur = "none"
     kind = data.get("kind") if data.get("kind") in ("info", "confirm") else "info"
+    weekdays = reminders_core.parse_weekdays(data.get("weekdays"))
+    if recur == "weekly" and not weekdays:
+        weekdays = [base_dt.weekday()]
+    until = (data.get("until") or "").strip() or None
+
+    if recur == "none":
+        remind_at = base_dt.replace(second=0, microsecond=0)
+    else:
+        remind_at = reminders_core.next_fire(
+            recur, weekdays, base_dt.hour, base_dt.minute, datetime.now()
+        )
+
     followup = data.get("followup")
     followup_json = json.dumps(followup) if isinstance(followup, dict) else None
     task_id = data.get("task_id")
+    return {
+        "task_id": int(task_id) if task_id else None,
+        "message": message,
+        "remind_at": remind_at.isoformat(timespec="minutes"),
+        "recur": recur,
+        "weekdays": reminders_core.weekdays_to_str(weekdays) if recur == "weekly" else None,
+        "until": until,
+        "kind": kind,
+        "followup": followup_json,
+    }
+
+
+@app.route("/api/reminders", methods=["POST"])
+@login_required
+def api_reminders_add():
+    try:
+        f = _parse_reminder_body(request.get_json(force=True, silent=True) or {})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     db = get_db()
     db.execute(
-        "INSERT INTO reminders (task_id, message, remind_at, recur, kind, "
-        "followup, active, created_at) VALUES (?,?,?,?,?,?,1,?)",
-        (int(task_id) if task_id else None, message, remind_at, recur, kind,
-         followup_json, datetime.now().isoformat()),
+        "INSERT INTO reminders (task_id, message, remind_at, recur, weekdays, "
+        "until, kind, followup, active, paused, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,1,0,?)",
+        (f["task_id"], f["message"], f["remind_at"], f["recur"], f["weekdays"],
+         f["until"], f["kind"], f["followup"], datetime.now().isoformat()),
     )
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/reminders/<int:rid>", methods=["PUT"])
+@login_required
+def api_reminders_edit(rid):
+    db = get_db()
+    if db.execute("SELECT 1 FROM reminders WHERE id=?", (rid,)).fetchone() is None:
+        return jsonify({"error": "nicht gefunden"}), 404
+    try:
+        f = _parse_reminder_body(request.get_json(force=True, silent=True) or {})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    db.execute(
+        "UPDATE reminders SET task_id=?, message=?, remind_at=?, recur=?, "
+        "weekdays=?, until=?, kind=?, followup=?, active=1 WHERE id=?",
+        (f["task_id"], f["message"], f["remind_at"], f["recur"], f["weekdays"],
+         f["until"], f["kind"], f["followup"], rid),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/reminders/<int:rid>/pause", methods=["POST"])
+@login_required
+def api_reminders_pause(rid):
+    """Pausiert/entpausiert eine Erinnerung. Beim Entpausieren wird die
+    naechste Faelligkeit neu in die Zukunft gerechnet (kein Nachfeuern)."""
+    data = request.get_json(silent=True) or {}
+    paused = 1 if data.get("paused") else 0
+    db = get_db()
+    row = db.execute("SELECT * FROM reminders WHERE id=?", (rid,)).fetchone()
+    if row is None:
+        return jsonify({"error": "nicht gefunden"}), 404
+    if not paused and row["recur"] in ("daily", "weekly"):
+        try:
+            t = datetime.fromisoformat(row["remind_at"])
+            nxt = reminders_core.next_fire(
+                row["recur"], row["weekdays"], t.hour, t.minute, datetime.now()
+            )
+            db.execute("UPDATE reminders SET paused=0, remind_at=? WHERE id=?",
+                       (nxt.isoformat(timespec="minutes"), rid))
+        except (ValueError, TypeError):
+            db.execute("UPDATE reminders SET paused=0 WHERE id=?", (rid,))
+    else:
+        db.execute("UPDATE reminders SET paused=? WHERE id=?", (paused, rid))
+    db.commit()
+    return jsonify({"ok": True, "paused": bool(paused)})
 
 
 @app.route("/api/reminders/<int:rid>", methods=["DELETE"])

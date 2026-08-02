@@ -124,9 +124,18 @@ function fmtRemAt(iso) {
   return m ? `${m[3]}.${m[2]}. ${m[4]}:${m[5]}` : iso;
 }
 
+let reminderById = {};
+
+function fmtDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso;
+}
+
 async function loadReminders() {
   const r = await api("/api/reminders");
   const all = r.reminders || [];
+  reminderById = {};
+  all.forEach((rem) => { reminderById[rem.id] = rem; });
   renderPending(all.filter((rem) => rem.pending));
   const active = all.filter((rem) => rem.active);
   const list = $("reminderList");
@@ -137,22 +146,40 @@ async function loadReminders() {
   list.innerHTML = active
     .map((rem) => {
       const badges = [];
-      if (rem.recur === "weekly") badges.push(`<span class="badge p2">woechentlich</span>`);
+      if (rem.recur !== "none") badges.push(`<span class="badge p2">${escapeHtml(rem.recur_label)}</span>`);
       if (rem.kind === "confirm") badges.push(`<span class="badge p3">Ja/Nein</span>`);
-      return `<li class="task">
+      if (rem.until) badges.push(`<span class="badge p1">bis ${fmtDate(rem.until)}</span>`);
+      if (rem.paused) badges.push(`<span class="badge p3">pausiert</span>`);
+      return `<li class="task ${rem.paused ? "paused" : ""}">
         <div class="task-main">
           <div class="task-title">🔔 ${escapeHtml(rem.message)}</div>
           <div class="task-meta"><span class="due">📅 ${fmtRemAt(rem.remind_at)}</span> ${badges.join(" ")}</div>
         </div>
         <div class="task-actions">
-          <button class="iconbtn del" data-remdel="${rem.id}" title="Erinnerung loeschen">🗑</button>
+          <button class="iconbtn" data-remedit="${rem.id}" title="Bearbeiten">✏️</button>
+          <button class="iconbtn" data-rempause="${rem.id}" data-paused="${rem.paused ? 1 : 0}" title="${rem.paused ? "Fortsetzen" : "Pausieren"}">${rem.paused ? "▶" : "⏸"}</button>
+          <button class="iconbtn del" data-remdel="${rem.id}" title="Loeschen">🗑</button>
         </div>
       </li>`;
     })
     .join("");
+  list.querySelectorAll("[data-remedit]").forEach((el) =>
+    el.addEventListener("click", () => editReminder(el.dataset.remedit))
+  );
+  list.querySelectorAll("[data-rempause]").forEach((el) =>
+    el.addEventListener("click", async () => {
+      await api(`/api/reminders/${el.dataset.rempause}/pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: el.dataset.paused === "0" }),
+      });
+      loadReminders();
+    })
+  );
   list.querySelectorAll("[data-remdel]").forEach((el) =>
     el.addEventListener("click", async () => {
       await api(`/api/reminders/${el.dataset.remdel}`, { method: "DELETE" });
+      if ($("remEditId").value === el.dataset.remdel) resetReminderForm();
       loadReminders();
     })
   );
@@ -174,6 +201,7 @@ function bindRows() {
 }
 
 function prefillReminder(taskId) {
+  resetReminderForm();
   $("remTaskId").value = taskId;
   $("remMessage").value = taskTitles[taskId] || "";
   $("reminderCard").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -368,6 +396,53 @@ $("notifBtn").addEventListener("click", async () => {
   }
 });
 
+function updateRecurUI() {
+  const r = $("remRecur").value;
+  $("weekdayBox").classList.toggle("hidden", r !== "weekly");
+  $("untilRow").classList.toggle("hidden", r === "none");
+}
+
+function resetReminderForm() {
+  $("reminderForm").reset();
+  $("remTaskId").value = "";
+  $("remEditId").value = "";
+  $("remSubmit").textContent = "+ Erinnerung";
+  $("remCancel").classList.add("hidden");
+  $("followupBox").classList.add("hidden");
+  updateRecurUI();
+}
+
+function editReminder(id) {
+  const rem = reminderById[id];
+  if (!rem) return;
+  resetReminderForm();
+  $("remEditId").value = id;
+  $("remTaskId").value = rem.task_id || "";
+  $("remMessage").value = rem.message;
+  $("remAt").value = (rem.remind_at || "").slice(0, 16);
+  $("remRecur").value = rem.recur;
+  document.querySelectorAll(".remWd").forEach((cb) => {
+    cb.checked = (rem.weekdays || []).includes(Number(cb.value));
+  });
+  $("remUntil").value = rem.until || "";
+  $("remConfirm").checked = rem.kind === "confirm";
+  if (rem.followup) {
+    $("remFollowMsg").value = rem.followup.message || "";
+    $("remFollowWeekday").value = String(rem.followup.weekday ?? 3);
+    const hh = String(rem.followup.hour ?? 6).padStart(2, "0");
+    const mm = String(rem.followup.minute ?? 0).padStart(2, "0");
+    $("remFollowTime").value = `${hh}:${mm}`;
+  }
+  $("followupBox").classList.toggle("hidden", rem.kind !== "confirm");
+  updateRecurUI();
+  $("remSubmit").textContent = "Speichern";
+  $("remCancel").classList.remove("hidden");
+  $("reminderCard").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+$("remRecur").addEventListener("change", updateRecurUI);
+$("remCancel").addEventListener("click", resetReminderForm);
+
 // Folge-Erinnerung nur bei "mit Ja/Nein" anbieten
 $("remConfirm").addEventListener("change", () => {
   $("followupBox").classList.toggle("hidden", !$("remConfirm").checked);
@@ -375,10 +450,18 @@ $("remConfirm").addEventListener("change", () => {
 
 $("reminderForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const recur = $("remRecur").value;
+  const weekdays = [...document.querySelectorAll(".remWd:checked")].map((cb) => Number(cb.value));
+  if (recur === "weekly" && !weekdays.length) {
+    toast("Bitte mindestens einen Wochentag waehlen.");
+    return;
+  }
   const body = {
     message: $("remMessage").value,
     remind_at: $("remAt").value,
-    recur: $("remWeekly").checked ? "weekly" : "none",
+    recur: recur,
+    weekdays: weekdays,
+    until: recur !== "none" ? $("remUntil").value || null : null,
     kind: $("remConfirm").checked ? "confirm" : "info",
     task_id: $("remTaskId").value || null,
   };
@@ -391,16 +474,15 @@ $("reminderForm").addEventListener("submit", async (e) => {
       minute: Number(m),
     };
   }
-  const r = await api("/api/reminders", {
-    method: "POST",
+  const editId = $("remEditId").value;
+  const r = await api(editId ? `/api/reminders/${editId}` : "/api/reminders", {
+    method: editId ? "PUT" : "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (r.ok) {
-    $("reminderForm").reset();
-    $("remTaskId").value = "";
-    $("followupBox").classList.add("hidden");
-    toast("Erinnerung gespeichert.");
+    resetReminderForm();
+    toast(editId ? "Erinnerung aktualisiert." : "Erinnerung gespeichert.");
     loadReminders();
   } else {
     toast(r.error || "Fehler beim Speichern.");

@@ -89,9 +89,28 @@
       <form id="reminderForm" class="addform">
         <input type="text" id="remMessage" placeholder="Woran erinnern? (z.B. Muell vorbereiten)" autocomplete="off" required>
         <div class="row">
-          <input type="datetime-local" id="remAt" title="Zeitpunkt" required>
-          <label class="chk"><input type="checkbox" id="remWeekly"> woechentlich</label>
+          <input type="datetime-local" id="remAt" title="Zeitpunkt (Datum + Uhrzeit)" required>
+          <select id="remRecur" title="Wiederholung">
+            <option value="none">einmalig</option>
+            <option value="daily">taeglich</option>
+            <option value="weekly">woechentlich</option>
+          </select>
           <label class="chk"><input type="checkbox" id="remConfirm"> mit Ja/Nein</label>
+        </div>
+        <div id="weekdayBox" class="weekdays hidden">
+          <span class="hint">An welchen Tagen?</span>
+          <div class="wd-toggles">
+            <label><input type="checkbox" class="remWd" value="0">Mo</label>
+            <label><input type="checkbox" class="remWd" value="1">Di</label>
+            <label><input type="checkbox" class="remWd" value="2">Mi</label>
+            <label><input type="checkbox" class="remWd" value="3">Do</label>
+            <label><input type="checkbox" class="remWd" value="4">Fr</label>
+            <label><input type="checkbox" class="remWd" value="5">Sa</label>
+            <label><input type="checkbox" class="remWd" value="6">So</label>
+          </div>
+        </div>
+        <div id="untilRow" class="row hidden">
+          <label class="chk" style="gap:8px">bis (optional): <input type="date" id="remUntil" title="Enddatum"></label>
         </div>
         <div id="followupBox" class="followup hidden">
           <p class="hint">Bei „Ja" Folge-Erinnerung anlegen:</p>
@@ -107,7 +126,11 @@
           </div>
         </div>
         <input type="hidden" id="remTaskId" value="">
-        <button type="submit" class="add">+ Erinnerung</button>
+        <input type="hidden" id="remEditId" value="">
+        <div class="row">
+          <button type="submit" class="add" id="remSubmit">+ Erinnerung</button>
+          <button type="button" class="iconbtn hidden" id="remCancel">Abbrechen</button>
+        </div>
       </form>
 
       <ul id="reminderList" class="tasklist"></ul>
