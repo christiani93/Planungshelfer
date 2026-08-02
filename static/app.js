@@ -1,6 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const expandedTasks = new Set(); // welche Aufgaben ihre Teilschritte offen zeigen
 
 async function api(url, opts) {
   const res = await fetch(url, opts);
@@ -39,9 +40,38 @@ function taskRow(t, inToday) {
       <div class="task-main">
         <div class="task-title">${escapeHtml(t.title)}</div>
         <div class="task-meta">${meta.join("")}</div>
+        ${subSection(t)}
       </div>
       <div class="task-actions">${actions}</div>
     </li>`;
+}
+
+function subRow(s) {
+  const done = s.status === "done";
+  return `<li class="subtask ${done ? "done" : ""}">
+    <span class="subcheck" data-subdone="${s.id}" title="Erledigt">✓</span>
+    <span class="subtitle">${escapeHtml(s.title)}</span>
+    <button class="subdel" data-subdel="${s.id}" title="Loeschen">✕</button>
+  </li>`;
+}
+
+function subSection(t) {
+  if (t.status === "done") return "";
+  const subs = t.subtasks || [];
+  const total = t.sub_total || 0;
+  const doneN = t.sub_done || 0;
+  const allDone = total > 0 && doneN === total;
+  const expanded = expandedTasks.has(t.id);
+  const label = total ? `${allDone ? "✓ " : ""}${doneN}/${total} Teilschritte` : "Teilschritte";
+  return `<div class="subwrap ${expanded ? "expanded" : ""} ${allDone ? "alldone" : ""}">
+    <button type="button" class="subtoggle" data-subtoggle="${t.id}">${label}</button>
+    <div class="subpanel">
+      <ul class="sublist">${subs.map(subRow).join("")}</ul>
+      <form class="subadd" data-parent="${t.id}">
+        <input type="text" placeholder="+ Teilschritt" autocomplete="off">
+      </form>
+    </div>
+  </div>`;
 }
 
 function escapeHtml(s) {
@@ -225,6 +255,44 @@ function bindRows() {
   );
   document.querySelectorAll("[data-remind]").forEach((el) =>
     el.addEventListener("click", () => prefillReminder(el.dataset.remind))
+  );
+  document.querySelectorAll("[data-subtoggle]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = Number(el.dataset.subtoggle);
+      const wrap = el.closest(".subwrap");
+      if (expandedTasks.has(id)) {
+        expandedTasks.delete(id);
+        wrap.classList.remove("expanded");
+      } else {
+        expandedTasks.add(id);
+        wrap.classList.add("expanded");
+        const inp = wrap.querySelector(".subadd input");
+        if (inp && !wrap.querySelector(".subtask")) inp.focus();
+      }
+    })
+  );
+  document.querySelectorAll("[data-subdone]").forEach((el) =>
+    el.addEventListener("click", () => complete(el.dataset.subdone, el))
+  );
+  document.querySelectorAll("[data-subdel]").forEach((el) =>
+    el.addEventListener("click", () => del(el.dataset.subdel))
+  );
+  document.querySelectorAll(".subadd").forEach((f) =>
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const pid = f.dataset.parent;
+      const input = f.querySelector("input");
+      const title = input.value.trim();
+      if (!title) return;
+      expandedTasks.add(Number(pid));
+      const r = await api(`/api/tasks/${pid}/subtasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (r.ok) await load();
+      else toast(r.error || "Fehler beim Anlegen.");
+    })
   );
 }
 

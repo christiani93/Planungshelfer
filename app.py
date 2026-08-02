@@ -118,15 +118,18 @@ def init_db():
             status     TEXT DEFAULT 'open',   -- open | done
             points     INTEGER DEFAULT 0,
             source     TEXT DEFAULT 'manuell',
+            parent_id  INTEGER,                 -- NULL = Hauptaufgabe, sonst Teilschritt
             created_at TEXT NOT NULL,
             done_at    TEXT
         )
         """
     )
-    # Leichte Migration: 'source' nachruesten, falls DB aus alter Version stammt.
+    # Leichte Migrationen: Spalten nachruesten, falls DB aus alter Version stammt.
     cols = {r[1] for r in db.execute("PRAGMA table_info(tasks)")}
     if "source" not in cols:
         db.execute("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'manuell'")
+    if "parent_id" not in cols:
+        db.execute("ALTER TABLE tasks ADD COLUMN parent_id INTEGER")
 
     # Push-Subscriptions (ein Geraet = eine Zeile, per endpoint eindeutig).
     db.execute(
@@ -240,13 +243,14 @@ def task_to_dict(row):
 
 
 def insert_task(db, title, priority=2, est_min=0, due_date=None, is_today=0,
-                notes="", source="manuell"):
+                notes="", source="manuell", parent_id=None):
     priority = min(3, max(1, int(priority or 2)))
     db.execute(
         "INSERT INTO tasks (title, notes, priority, est_min, due_date, is_today, "
-        "source, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        "source, parent_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
         (title, notes, priority, int(est_min or 0), due_date or None,
-         1 if is_today else 0, source or "manuell", datetime.now().isoformat()),
+         1 if is_today else 0, source or "manuell", parent_id,
+         datetime.now().isoformat()),
     )
     db.commit()
 
@@ -282,7 +286,8 @@ def build_stats(db):
 
     today_iso = date.today().isoformat()
     done_today = db.execute(
-        "SELECT COUNT(*) AS c FROM tasks WHERE status='done' AND substr(done_at,1,10)=?",
+        "SELECT COUNT(*) AS c FROM tasks WHERE status='done' AND "
+        "parent_id IS NULL AND substr(done_at,1,10)=?",
         (today_iso,),
     ).fetchone()["c"]
     today_total = db.execute(
@@ -394,23 +399,52 @@ def api_state():
     db = get_db()
     today_iso = date.today().isoformat()
     today_rows = db.execute(
-        "SELECT * FROM tasks WHERE is_today=1 AND "
+        "SELECT * FROM tasks WHERE parent_id IS NULL AND is_today=1 AND "
         "(status='open' OR substr(done_at,1,10)=?) "
         "ORDER BY status ASC, priority DESC, id ASC",
         (today_iso,),
     ).fetchall()
     backlog_rows = db.execute(
-        "SELECT * FROM tasks WHERE status='open' AND is_today=0 "
+        "SELECT * FROM tasks WHERE parent_id IS NULL AND status='open' AND is_today=0 "
         "ORDER BY priority DESC, "
         "CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC"
     ).fetchall()
+    today = [task_to_dict(r) for r in today_rows]
+    backlog = [task_to_dict(r) for r in backlog_rows]
+    _attach_subtasks(db, today + backlog)
     return jsonify(
         {
-            "today": [task_to_dict(r) for r in today_rows],
-            "backlog": [task_to_dict(r) for r in backlog_rows],
+            "today": today,
+            "backlog": backlog,
             "stats": build_stats(db),
         }
     )
+
+
+def _attach_subtasks(db, parents):
+    """Haengt jeder Hauptaufgabe ihre Teilschritte an (subtasks + Zaehler)."""
+    by_id = {p["id"]: p for p in parents}
+    for p in parents:
+        p["subtasks"] = []
+        p["sub_total"] = 0
+        p["sub_done"] = 0
+    if not by_id:
+        return
+    placeholders = ",".join("?" for _ in by_id)
+    rows = db.execute(
+        f"SELECT id, parent_id, title, status FROM tasks "
+        f"WHERE parent_id IN ({placeholders}) ORDER BY id ASC",
+        tuple(by_id),
+    ).fetchall()
+    for r in rows:
+        p = by_id.get(r["parent_id"])
+        if not p:
+            continue
+        p["subtasks"].append({"id": r["id"], "title": r["title"],
+                              "status": r["status"]})
+        p["sub_total"] += 1
+        if r["status"] == "done":
+            p["sub_done"] += 1
 
 
 @app.route("/api/review")
@@ -478,6 +512,26 @@ def api_add():
     return jsonify({"ok": True})
 
 
+@app.route("/api/tasks/<int:pid>/subtasks", methods=["POST"])
+@login_required
+def api_add_subtask(pid):
+    """Legt einen Teilschritt unter einer Hauptaufgabe an (nur eine Ebene)."""
+    db = get_db()
+    parent = db.execute("SELECT parent_id FROM tasks WHERE id=?", (pid,)).fetchone()
+    if parent is None:
+        return jsonify({"error": "Aufgabe nicht gefunden"}), 404
+    if parent["parent_id"] is not None:
+        return jsonify({"error": "Teilschritte koennen keine Unter-Teilschritte haben"}), 400
+    data = request.get_json(force=True, silent=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "Titel fehlt"}), 400
+    # Teilschritte sind klein (Prioritaet 1 -> 10 XP) und nicht im Heute/Backlog.
+    insert_task(db, title=title, priority=1, is_today=0, source="manuell",
+                parent_id=pid)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/ingest", methods=["POST"])
 def api_ingest():
     """Machine-to-Machine: andere Projekte legen hier Aufgaben an.
@@ -540,7 +594,8 @@ def api_toggle_today(tid):
 @login_required
 def api_delete(tid):
     db = get_db()
-    db.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    # Aufgabe + eventuelle Teilschritte entfernen.
+    db.execute("DELETE FROM tasks WHERE id=? OR parent_id=?", (tid, tid))
     db.commit()
     return jsonify({"ok": True})
 
@@ -776,7 +831,7 @@ def api_one_thing():
     """Pickt EINE kleine offene Aufgabe zum Sofort-Starten (niedrigste est_min)."""
     db = get_db()
     row = db.execute(
-        "SELECT * FROM tasks WHERE status='open' "
+        "SELECT * FROM tasks WHERE status='open' AND parent_id IS NULL "
         "ORDER BY CASE WHEN est_min=0 THEN 999 ELSE est_min END ASC, "
         "priority DESC, id ASC LIMIT 1"
     ).fetchone()

@@ -41,6 +41,27 @@ main{max-width:760px;margin:24px auto;padding:0 16px;display:flex;flex-direction
 .followup{background:var(--card2);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;margin:4px 0}
 .followup .hint{margin-top:0}
+.subwrap{margin-top:8px}
+.subtoggle{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;
+  padding:2px 0;display:inline-flex;align-items:center;gap:5px}
+.subtoggle::before{content:"▸";transition:transform .15s}
+.subwrap.expanded .subtoggle::before{transform:rotate(90deg)}
+.subwrap.alldone .subtoggle{color:var(--accent)}
+.subpanel{display:none;margin-top:6px}
+.subwrap.expanded .subpanel{display:block}
+.sublist{list-style:none;margin:0 0 6px;padding:0;display:flex;flex-direction:column;gap:5px}
+.subtask{display:flex;align-items:center;gap:8px;font-size:14px}
+.subcheck{width:18px;height:18px;border:2px solid var(--muted);border-radius:5px;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:transparent;
+  cursor:pointer;transition:.15s}
+.subcheck:hover{border-color:var(--accent)}
+.subtask.done .subcheck{background:var(--accent);border-color:var(--accent);color:#04210f}
+.subtask.done .subtitle{text-decoration:line-through;color:var(--muted)}
+.subtitle{flex:1}
+.subdel{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 4px}
+.subdel:hover{color:var(--red)}
+.subadd input{width:100%;padding:6px 10px;font-size:13px;background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;color:var(--txt)}
 .weekbars{display:flex;gap:8px;align-items:flex-end;margin:6px 0 10px}
 .wb{flex:1;display:flex;flex-direction:column;align-items:center}
 .wb-track{height:90px;width:100%;display:flex;align-items:flex-end;justify-content:center}
