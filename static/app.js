@@ -83,6 +83,34 @@ async function load() {
 
   bindRows();
   loadReminders();
+  loadReview();
+}
+
+const WD_LABELS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+
+async function loadReview() {
+  const r = await api("/api/review");
+  const max = Math.max(1, ...r.days.map((d) => d.count));
+  $("weekBars").innerHTML = r.days
+    .map((d) => {
+      const cls = "wb" + (d.today ? " today" : d.future ? " future" : "");
+      const h = d.count ? Math.max(8, Math.round((d.count / max) * 100)) : 3;
+      const val = d.count ? `<span class="wb-val">${d.count}</span>` : "";
+      return `<div class="${cls}" title="${WD_LABELS[d.weekday]}: ${d.count} erledigt, ${d.xp} XP">
+        <div class="wb-track"><div class="wb-bar" style="height:${h}%">${val}</div></div>
+        <div class="wb-lbl">${WD_LABELS[d.weekday]}</div>
+      </div>`;
+    })
+    .join("");
+  $("reviewSummary").textContent = `${r.week_done} erledigt · ${r.week_xp} XP`;
+  const dDone = r.week_done - r.last_week_done;
+  const trend =
+    dDone > 0 ? `▲ ${dDone} mehr als letzte Woche`
+    : dDone < 0 ? `▼ ${-dDone} weniger als letzte Woche`
+    : r.last_week_done ? "gleich wie letzte Woche" : "";
+  const parts = [`${r.active_days} aktive Tage`, `Streak ${r.streak} 🔥`];
+  if (trend) parts.push(trend);
+  $("reviewFoot").textContent = parts.join(" · ");
 }
 
 let taskTitles = {};

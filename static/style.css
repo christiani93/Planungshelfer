@@ -41,6 +41,17 @@ main{max-width:760px;margin:24px auto;padding:0 16px;display:flex;flex-direction
 .followup{background:var(--card2);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;margin:4px 0}
 .followup .hint{margin-top:0}
+.weekbars{display:flex;gap:8px;align-items:flex-end;margin:6px 0 10px}
+.wb{flex:1;display:flex;flex-direction:column;align-items:center}
+.wb-track{height:90px;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.wb-bar{width:72%;max-width:34px;min-height:3px;border-radius:6px 6px 0 0;position:relative;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));transition:height .4s ease}
+.wb-val{position:absolute;top:-16px;left:-4px;right:-4px;text-align:center;font-size:11px;
+  color:var(--muted);font-weight:600}
+.wb-lbl{font-size:11px;color:var(--muted);margin-top:6px}
+.wb.today .wb-bar{background:linear-gradient(180deg,var(--gold),#d97706)}
+.wb.today .wb-lbl{color:var(--gold);font-weight:700}
+.wb.future{opacity:.35}
 .weekdays{margin:2px 0 4px}
 .wd-toggles{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .wd-toggles label{display:inline-flex;align-items:center;gap:4px;font-size:13px;

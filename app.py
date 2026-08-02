@@ -413,6 +413,51 @@ def api_state():
     )
 
 
+@app.route("/api/review")
+@login_required
+def api_review():
+    """Wochen-Rueckblick: erledigte Aufgaben + XP dieser Woche (Mo-So),
+    Tagesverlauf fuer die Mini-Grafik und Vergleich zur Vorwoche."""
+    db = get_db()
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    last_monday = monday - timedelta(days=7)
+
+    days = []
+    week_done = week_xp = active_days = 0
+    for i in range(7):
+        d = monday + timedelta(days=i)
+        row = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(points),0) AS xp FROM tasks "
+            "WHERE status='done' AND substr(done_at,1,10)=?",
+            (d.isoformat(),),
+        ).fetchone()
+        days.append({"date": d.isoformat(), "weekday": i,
+                     "count": row["c"], "xp": row["xp"],
+                     "today": d == today, "future": d > today})
+        week_done += row["c"]
+        week_xp += row["xp"]
+        if row["c"] > 0 and d <= today:
+            active_days += 1
+
+    lw = db.execute(
+        "SELECT COUNT(*) AS c, COALESCE(SUM(points),0) AS xp FROM tasks "
+        "WHERE status='done' AND substr(done_at,1,10)>=? AND substr(done_at,1,10)<?",
+        (last_monday.isoformat(), monday.isoformat()),
+    ).fetchone()
+
+    return jsonify({
+        "week_start": monday.isoformat(),
+        "days": days,
+        "week_done": week_done,
+        "week_xp": week_xp,
+        "active_days": active_days,
+        "streak": compute_streak(db),
+        "last_week_done": lw["c"],
+        "last_week_xp": lw["xp"],
+    })
+
+
 @app.route("/api/tasks", methods=["POST"])
 @login_required
 def api_add():
